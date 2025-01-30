@@ -7,25 +7,13 @@ import { useMedia } from "@/hooks/useMedia"
 import { useWebRTC } from "@/hooks/useWebRTC"
 import { VideoPlayer } from "@/components/video-player"
 import { supabase } from "@/lib/supabase"
-
-interface Room {
-  id: string
-  name: string
-  users: User[]
-}
-
-interface User {
-  id: string
-  name: string
-  isInCall: boolean
-  isVideoOn: boolean
-  isMuted: boolean
-}
+import { Room, getRoomsWithUsers } from "@/lib/supabase"
 
 export default function DashboardPage() {
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null)
   const [socket, setSocket] = useState<any>(null)
   const [currentUser, setCurrentUser] = useState<any>(null)
+  const [rooms, setRooms] = useState<Room[]>([])
 
   const {
     stream: localStream,
@@ -37,33 +25,7 @@ export default function DashboardPage() {
     toggleAudio,
   } = useMedia()
 
-  const peers = useWebRTC(selectedRoom, socket, localStream)
-
-  // Örnek veri - gerçek uygulamada Supabase'den gelecek
-  const rooms: Room[] = [
-    {
-      id: "general",
-      name: "General",
-      users: [
-        { id: "1", name: "John Doe", isInCall: true, isVideoOn: false, isMuted: true },
-        { id: "2", name: "Jane Smith", isInCall: true, isVideoOn: true, isMuted: false },
-      ],
-    },
-    {
-      id: "gaming",
-      name: "Gaming",
-      users: [
-        { id: "3", name: "Alex Johnson", isInCall: true, isVideoOn: true, isMuted: false },
-      ],
-    },
-    {
-      id: "music",
-      name: "Music",
-      users: [],
-    },
-  ]
-
-  const currentRoom = rooms.find(room => room.id === selectedRoom)
+  const { peers } = useWebRTC(selectedRoom || '', currentUser?.id || '')
 
   useEffect(() => {
     // Socket.io bağlantısını kur
@@ -84,6 +46,44 @@ export default function DashboardPage() {
     }
   }, [])
 
+  useEffect(() => {
+    const fetchRooms = async () => {
+      try {
+        console.log('Fetching rooms...');
+        const roomsData = await getRoomsWithUsers();
+        console.log('Rooms data:', roomsData);
+        setRooms(roomsData);
+      } catch (error) {
+        console.error('Failed to fetch rooms:', error);
+      }
+    };
+
+    fetchRooms();
+
+    // Realtime subscription for room updates
+    const roomsSubscription = supabase
+      .channel('rooms_channel')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'room_users'
+        },
+        async (payload) => {
+          console.log('Room users changed:', payload);
+          const updatedRooms = await getRoomsWithUsers();
+          console.log('Updated rooms:', updatedRooms);
+          setRooms(updatedRooms);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      roomsSubscription.unsubscribe();
+    };
+  }, []);
+
   // Oda seçildiğinde medya akışını başlat
   useEffect(() => {
     if (selectedRoom) {
@@ -100,6 +100,8 @@ export default function DashboardPage() {
       setSelectedRoom(roomId)
     }
   }
+
+  const currentRoom = rooms.find(room => room.id === selectedRoom)
 
   return (
     <div className="h-[calc(100vh-2rem)] flex gap-4">
@@ -138,7 +140,7 @@ export default function DashboardPage() {
                       className="flex items-center gap-2 text-sm text-muted-foreground"
                     >
                       <div className="w-2 h-2 rounded-full bg-green-500" />
-                      <span>{user.name}</span>
+                      <span>{user.profile.username}</span>
                       {user.isMuted && <MicOff className="h-3 w-3 ml-auto" />}
                       {user.isVideoOn && <Video className="h-3 w-3" />}
                     </div>
@@ -162,11 +164,11 @@ export default function DashboardPage() {
             />
 
             {/* Remote Videos */}
-            {peers.map((peer) => (
+            {Array.from(peers.values()).map((peer) => (
               <VideoPlayer
-                key={peer.peerId}
+                key={peer.userId}
                 stream={peer.stream || null}
-                username={`User ${peer.peerId}`}
+                username={`User ${peer.userId}`}
               />
             ))}
           </div>
