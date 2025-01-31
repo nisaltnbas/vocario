@@ -7,10 +7,12 @@ import { useMedia } from "@/hooks/useMedia"
 import { useWebRTC } from "@/hooks/useWebRTC"
 import { VideoPlayer } from "@/components/video-player"
 import { supabase } from "@/lib/supabase"
-import { Room, getRoomsWithUsers } from "@/lib/supabase"
+import { Room, getRoomsWithUsers, joinRoom, subscribeToRoom } from "@/lib/supabase"
+import { useUser } from '@/components/providers/user-provider'
 
 export default function DashboardPage() {
-  const [selectedRoom, setSelectedRoom] = useState<string | null>(null)
+  const { user } = useUser()
+  const [selectedRoom, setSelectedRoom] = useState<Room | null>(null)
   const [socket, setSocket] = useState<any>(null)
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [rooms, setRooms] = useState<Room[]>([])
@@ -25,7 +27,7 @@ export default function DashboardPage() {
     toggleAudio,
   } = useMedia()
 
-  const { peers } = useWebRTC(selectedRoom || '', currentUser?.id || '')
+  const { peers } = useWebRTC(selectedRoom?.id || '', currentUser?.id || '')
 
   useEffect(() => {
     // Socket.io bağlantısını kur
@@ -48,41 +50,39 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const fetchRooms = async () => {
+      console.log('Fetching rooms...')
       try {
-        console.log('Fetching rooms...');
-        const roomsData = await getRoomsWithUsers();
-        console.log('Rooms data:', roomsData);
-        setRooms(roomsData);
+        const roomsData = await getRoomsWithUsers()
+        console.log('Rooms data:', roomsData)
+        setRooms(roomsData)
       } catch (error) {
-        console.error('Failed to fetch rooms:', error);
+        console.error('Failed to fetch rooms:', error)
       }
-    };
+    }
 
-    fetchRooms();
+    fetchRooms()
+  }, [])
 
-    // Realtime subscription for room updates
-    const roomsSubscription = supabase
-      .channel('rooms_channel')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'room_users'
-        },
-        async (payload) => {
-          console.log('Room users changed:', payload);
-          const updatedRooms = await getRoomsWithUsers();
-          console.log('Updated rooms:', updatedRooms);
-          setRooms(updatedRooms);
-        }
+  useEffect(() => {
+    if (!selectedRoom) return
+
+    console.log('Subscribing to room:', selectedRoom.id)
+    const unsubscribe = subscribeToRoom(selectedRoom.id, (updatedUsers) => {
+      console.log('Received room update:', updatedUsers)
+      setRooms(prevRooms => 
+        prevRooms.map(room => 
+          room.id === selectedRoom.id 
+            ? { ...room, users: updatedUsers }
+            : room
+        )
       )
-      .subscribe();
+    })
 
     return () => {
-      roomsSubscription.unsubscribe();
-    };
-  }, []);
+      console.log('Unsubscribing from room:', selectedRoom.id)
+      unsubscribe()
+    }
+  }, [selectedRoom])
 
   // Oda seçildiğinde medya akışını başlat
   useEffect(() => {
@@ -93,15 +93,19 @@ export default function DashboardPage() {
     }
   }, [selectedRoom])
 
-  const handleRoomSelect = (roomId: string) => {
-    if (selectedRoom === roomId) {
-      setSelectedRoom(null)
-    } else {
-      setSelectedRoom(roomId)
+  const handleRoomClick = async (room: Room) => {
+    if (!user) return
+    
+    try {
+      console.log('Joining room:', room.id)
+      await joinRoom(room.id, user.id)
+      setSelectedRoom(room)
+    } catch (error) {
+      console.error('Error joining room:', error)
     }
   }
 
-  const currentRoom = rooms.find(room => room.id === selectedRoom)
+  const currentRoom = rooms.find(room => room.id === selectedRoom?.id)
 
   return (
     <div className="h-[calc(100vh-2rem)] flex gap-4">
@@ -115,9 +119,9 @@ export default function DashboardPage() {
           {rooms.map((room) => (
             <div key={room.id} className="space-y-2">
               <button
-                onClick={() => handleRoomSelect(room.id)}
+                onClick={() => handleRoomClick(room)}
                 className={`w-full p-2 flex items-center gap-2 rounded-md cursor-pointer transition-colors ${
-                  selectedRoom === room.id
+                  selectedRoom?.id === room.id
                     ? "bg-primary text-primary-foreground"
                     : "bg-background hover:bg-accent"
                 }`}
