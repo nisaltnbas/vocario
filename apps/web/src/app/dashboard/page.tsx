@@ -7,7 +7,7 @@ import { useMedia } from "@/hooks/useMedia"
 import { useWebRTC } from "@/hooks/useWebRTC"
 import { VideoPlayer } from "@/components/video-player"
 import { supabase } from "@/lib/supabase"
-import { Room, getRoomsWithUsers, joinRoom, subscribeToRoom } from "@/lib/supabase"
+import { Room, getRoomsWithUsers, joinRoom, subscribeToAllRooms } from "@/lib/supabase"
 import { useUser } from '@/components/providers/user-provider'
 
 export default function DashboardPage() {
@@ -48,41 +48,41 @@ export default function DashboardPage() {
     }
   }, [])
 
+  // Initial room fetch and subscription setup
   useEffect(() => {
     const fetchRooms = async () => {
-      console.log('Fetching rooms...')
+      console.log('Fetching initial rooms...')
       try {
         const roomsData = await getRoomsWithUsers()
-        console.log('Rooms data:', roomsData)
+        console.log('Initial rooms data:', roomsData)
         setRooms(roomsData)
       } catch (error) {
-        console.error('Failed to fetch rooms:', error)
+        console.error('Failed to fetch initial rooms:', error)
       }
     }
 
     fetchRooms()
-  }, [])
 
-  useEffect(() => {
-    if (!selectedRoom) return
-
-    console.log('Subscribing to room:', selectedRoom.id)
-    const unsubscribe = subscribeToRoom(selectedRoom.id, (updatedUsers) => {
-      console.log('Received room update:', updatedUsers)
-      setRooms(prevRooms => 
-        prevRooms.map(room => 
-          room.id === selectedRoom.id 
-            ? { ...room, users: updatedUsers }
-            : room
-        )
-      )
+    // Subscribe to all room changes
+    console.log('Setting up room subscription...')
+    const unsubscribe = subscribeToAllRooms((updatedRooms) => {
+      console.log('Received rooms update:', updatedRooms)
+      setRooms(updatedRooms)
+      
+      // Update selected room if it exists in the updated rooms
+      if (selectedRoom) {
+        const updatedSelectedRoom = updatedRooms.find(room => room.id === selectedRoom.id)
+        if (updatedSelectedRoom) {
+          setSelectedRoom(updatedSelectedRoom)
+        }
+      }
     })
 
     return () => {
-      console.log('Unsubscribing from room:', selectedRoom.id)
+      console.log('Cleaning up room subscription...')
       unsubscribe()
     }
-  }, [selectedRoom])
+  }, [])
 
   // Oda seçildiğinde medya akışını başlat
   useEffect(() => {

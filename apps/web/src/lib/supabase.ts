@@ -118,6 +118,31 @@ export const subscribeToRoom = (roomId: string, callback: (users: RoomUser[]) =>
   };
 };
 
+export const subscribeToAllRooms = (callback: (rooms: Room[]) => void) => {
+  // Subscribe to room_users changes
+  const roomUsersSubscription = supabase
+    .channel('room_users_channel')
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'room_users'
+      },
+      async () => {
+        // Fetch all rooms and their users when any change occurs
+        const rooms = await getRoomsWithUsers();
+        callback(rooms);
+      }
+    )
+    .subscribe();
+
+  // Return unsubscribe function
+  return () => {
+    roomUsersSubscription.unsubscribe();
+  };
+};
+
 // Profile functions
 export const getProfile = async (userId: string) => {
   const { data, error } = await supabase
