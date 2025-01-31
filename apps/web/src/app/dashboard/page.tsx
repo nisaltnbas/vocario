@@ -19,6 +19,7 @@ export default function DashboardPage() {
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [rooms, setRooms] = useState<Room[]>([])
   const [peerStreams, setPeerStreams] = useState<Map<string, MediaStream | null>>(new Map())
+  const [isVideoEnabled, setIsVideoEnabled] = useState(false)
   const webrtcRef = useRef<WebRTCService>(new WebRTCService())
 
   const {
@@ -246,94 +247,72 @@ export default function DashboardPage() {
               isMuted={isMuted}
               isVideoOn={isVideoOn}
               onToggleMute={handleToggleMute}
-              onToggleVideo={handleToggleVideo}
+              onToggleVideo={() => {
+                handleToggleVideo();
+                setIsVideoEnabled(!isVideoEnabled);
+              }}
               onLeaveRoom={handleLeaveRoom}
             />
           </div>
         )}
       </div>
 
-      {selectedRoom ? (
-        <div className="flex-1 flex flex-col bg-muted/30 rounded-lg">
-          {/* Video Grid */}
-          <div className="flex-1 grid grid-cols-2 gap-4 p-4">
-            {/* Local Video */}
+      {/* Chat Section */}
+      <div className="flex-1 bg-muted/30 rounded-lg flex flex-col">
+        <div className="p-4 border-b">
+          <h2 className="font-semibold flex items-center gap-2">
+            <MessageSquare className="h-4 w-4" />
+            Chat {currentRoom?.name ? `- ${currentRoom.name}` : ''}
+          </h2>
+        </div>
+        
+        {/* Chat Messages Area */}
+        <div className="flex-1 p-4 space-y-4 overflow-auto">
+          <div className="bg-background p-3 rounded-lg">
+            <p className="text-sm font-medium">User 1</p>
+            <p className="text-sm">Hello everyone!</p>
+          </div>
+          <div className="bg-background p-3 rounded-lg">
+            <p className="text-sm font-medium">User 2</p>
+            <p className="text-sm">Hi there!</p>
+          </div>
+        </div>
+
+        {/* Chat Input */}
+        <div className="p-4 border-t">
+          <input
+            type="text"
+            placeholder="Type a message..."
+            className="w-full p-2 rounded-md bg-background"
+          />
+        </div>
+      </div>
+
+      {/* Video Section - Only show when enabled */}
+      {isVideoEnabled && selectedRoom && (
+        <div className="w-96 bg-muted/30 rounded-lg p-4 flex flex-col">
+          <h2 className="font-semibold mb-4 flex items-center gap-2">
+            <Video className="h-4 w-4" />
+            Video
+          </h2>
+          <div className="flex-1 space-y-4">
             {localStream && (
               <VideoPlayer
                 stream={localStream}
                 isMuted={true}
-                username={`${currentUser?.user_metadata?.username || 'You'} (You)`}
+                username={currentUser?.user_metadata?.username + " (You)"}
               />
             )}
-
-            {/* Remote Videos */}
-            {Array.from(peerStreams.entries()).map(([peerId, stream]) => {
-              const peerUser = currentRoom?.users.find(u => u.user_id === peerId);
-              return (
+            {Array.from(peerStreams).map(([peerId, stream]) => {
+              const peerUser = currentRoom?.users.find(u => u.id === peerId)
+              return stream && (
                 <VideoPlayer
                   key={peerId}
                   stream={stream}
-                  username={peerUser?.profile.username || `User ${peerId}`}
+                  username={peerUser?.profile.username}
                 />
-              );
+              )
             })}
-          </div>
-
-          {/* Controls */}
-          <div className="h-20 border-t bg-background p-4 flex items-center justify-center gap-4">
-            <button
-              onClick={toggleAudio}
-              className={`p-4 rounded-full ${
-                !localStream?.getAudioTracks()[0]?.enabled
-                  ? "bg-destructive"
-                  : "bg-primary"
-              } text-white hover:opacity-90`}
-            >
-              {!localStream?.getAudioTracks()[0]?.enabled ? <MicOff /> : <Mic />}
-            </button>
-            <button
-              onClick={toggleVideo}
-              className={`p-4 rounded-full ${
-                !localStream?.getVideoTracks()[0]?.enabled
-                  ? "bg-destructive"
-                  : "bg-primary"
-              } text-white hover:opacity-90`}
-            >
-              {!localStream?.getVideoTracks()[0]?.enabled ? <VideoOff /> : <Video />}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          Select a room to join the conversation
-        </div>
-      )}
-
-      {/* Chat Messages */}
-      {selectedRoom && (
-        <div className="w-80 bg-muted/30 rounded-lg flex flex-col">
-          <div className="p-4 border-b">
-            <h2 className="font-semibold flex items-center gap-2">
-              <MessageSquare className="h-4 w-4" />
-              Chat - {currentRoom?.name}
-            </h2>
-          </div>
-          <div className="flex-1 p-4 space-y-4 overflow-auto">
-            <div className="bg-background p-3 rounded-lg">
-              <p className="text-sm font-medium">User 1</p>
-              <p className="text-sm">Hello everyone!</p>
-            </div>
-            <div className="bg-background p-3 rounded-lg">
-              <p className="text-sm font-medium">User 2</p>
-              <p className="text-sm">Hi there!</p>
-            </div>
-          </div>
-          <div className="p-4 border-t">
-            <input
-              type="text"
-              placeholder="Type a message..."
-              className="w-full p-2 rounded-md bg-background"
-            />
           </div>
         </div>
       )}
