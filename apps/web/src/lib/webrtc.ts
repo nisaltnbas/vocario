@@ -12,6 +12,8 @@ export class WebRTCService {
   private socket: Socket | null = null;
   private roomId: string = '';
   private userId: string = '';
+  private isVideoEnabled: boolean = false;
+  private isAudioEnabled: boolean = true;
 
   constructor() {
     this.handleIceCandidate = this.handleIceCandidate.bind(this);
@@ -34,6 +36,10 @@ export class WebRTCService {
 
   async setLocalStream(stream: MediaStream) {
     this.localStream = stream;
+    // Set initial states
+    this.isVideoEnabled = stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
+    this.isAudioEnabled = stream.getAudioTracks().length > 0 && stream.getAudioTracks()[0].enabled;
+    
     // Add local stream to all existing peer connections
     for (const [peerId, peer] of Array.from(this.peerConnections.entries())) {
       this.addTracksToConnection(peer.connection);
@@ -207,5 +213,38 @@ export class WebRTCService {
     this.leaveRoom();
     this.localStream = null;
     this.socket = null;
+  }
+
+  toggleMute() {
+    if (this.localStream) {
+      const audioTracks = this.localStream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        this.isAudioEnabled = !this.isAudioEnabled;
+        audioTracks.forEach(track => {
+          track.enabled = this.isAudioEnabled;
+        });
+      }
+    }
+    return this.isAudioEnabled;
+  }
+
+  toggleVideo() {
+    if (this.localStream) {
+      const videoTracks = this.localStream.getVideoTracks();
+      if (videoTracks.length > 0) {
+        this.isVideoEnabled = !this.isVideoEnabled;
+        videoTracks.forEach(track => {
+          track.enabled = this.isVideoEnabled;
+        });
+      }
+    }
+    return this.isVideoEnabled;
+  }
+
+  getMediaState() {
+    return {
+      isVideoEnabled: this.isVideoEnabled,
+      isAudioEnabled: this.isAudioEnabled
+    };
   }
 } 

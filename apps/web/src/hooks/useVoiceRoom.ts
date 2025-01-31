@@ -1,19 +1,64 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { getRoomUsers, joinRoom, leaveRoom, RoomUser } from '@/lib/supabase';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
 
 interface UseVoiceRoomProps {
   roomId: string;
   userId: string;
+  webrtcService?: any; // Replace with proper type
 }
 
-export const useVoiceRoom = ({ roomId, userId }: UseVoiceRoomProps) => {
+export const useVoiceRoom = ({ roomId, userId, webrtcService }: UseVoiceRoomProps) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [users, setUsers] = useState<RoomUser[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOn, setIsVideoOn] = useState(false);
   const { toast } = useToast();
+  const router = useRouter();
+
+  const handleLeaveRoom = useCallback(async () => {
+    if (roomId && userId) {
+      try {
+        await leaveRoom(roomId, userId);
+        if (socket) {
+          socket.emit('leave-room', { roomId, userId });
+        }
+        if (webrtcService) {
+          webrtcService.leaveRoom();
+        }
+        router.push('/dashboard'); // Or wherever you want to redirect after leaving
+      } catch (error) {
+        console.error('Failed to leave room:', error);
+      }
+    }
+  }, [roomId, userId, socket, webrtcService, router]);
+
+  const handleToggleMute = useCallback(() => {
+    if (webrtcService) {
+      const isEnabled = webrtcService.toggleMute();
+      setIsMuted(!isEnabled);
+    }
+  }, [webrtcService]);
+
+  const handleToggleVideo = useCallback(() => {
+    if (webrtcService) {
+      const isEnabled = webrtcService.toggleVideo();
+      setIsVideoOn(isEnabled);
+    }
+  }, [webrtcService]);
+
+  // Update media state when webrtcService changes
+  useEffect(() => {
+    if (webrtcService) {
+      const mediaState = webrtcService.getMediaState();
+      setIsMuted(!mediaState.isAudioEnabled);
+      setIsVideoOn(mediaState.isVideoEnabled);
+    }
+  }, [webrtcService]);
 
   // Handle room joining/leaving
   useEffect(() => {
@@ -29,16 +74,6 @@ export const useVoiceRoom = ({ roomId, userId }: UseVoiceRoomProps) => {
     socketInstance.on('connect', async () => {
       setIsConnecting(true);
       try {
-        // Leave any existing rooms first
-        const currentRooms = users.filter(u => u.user_id === userId);
-        for (const room of currentRooms) {
-          if (room.room_id !== roomId) {  // Only leave other rooms
-            await leaveRoom(room.room_id, userId);
-            // Emit leave-room event to clean up WebRTC connections
-            socketInstance.emit('leave-room', { roomId: room.room_id, userId });
-          }
-        }
-        
         // Join the new room
         await joinRoom(roomId, userId);
         socketInstance.emit('join-room', { roomId, userId });
@@ -57,14 +92,9 @@ export const useVoiceRoom = ({ roomId, userId }: UseVoiceRoomProps) => {
     setSocket(socketInstance);
 
     return () => {
-      if (roomId && userId) {
-        // Clean up the current room before unmounting
-        leaveRoom(roomId, userId).catch(console.error);
-        socketInstance.emit('leave-room', { roomId, userId });
-      }
       socketInstance.disconnect();
     };
-  }, [roomId, userId, toast, users]);
+  }, [roomId, userId, toast]);
 
   // Fetch room users for the current room only
   useEffect(() => {
@@ -108,5 +138,10 @@ export const useVoiceRoom = ({ roomId, userId }: UseVoiceRoomProps) => {
     users,
     isConnecting,
     socket,
+    isMuted,
+    isVideoOn,
+    handleToggleMute,
+    handleToggleVideo,
+    handleLeaveRoom,
   };
 }; 

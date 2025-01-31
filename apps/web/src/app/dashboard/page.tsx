@@ -9,6 +9,8 @@ import { supabase } from "@/lib/supabase"
 import { Room, getRoomsWithUsers, joinRoom, subscribeToAllRooms, removeFromAllRooms } from "@/lib/supabase"
 import { useUser } from '@/components/providers/user-provider'
 import { WebRTCService } from "@/lib/webrtc"
+import { VoiceControls } from '@/components/voice-controls'
+import { useVoiceRoom } from '@/hooks/useVoiceRoom'
 
 export default function DashboardPage() {
   const { user } = useUser()
@@ -16,7 +18,7 @@ export default function DashboardPage() {
   const [socket, setSocket] = useState<any>(null)
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [rooms, setRooms] = useState<Room[]>([])
-  const [peerStreams, setPeerStreams] = useState<Map<string, MediaStream>>(new Map())
+  const [peerStreams, setPeerStreams] = useState<Map<string, MediaStream | null>>(new Map())
   const webrtcRef = useRef<WebRTCService>(new WebRTCService())
 
   const {
@@ -28,6 +30,21 @@ export default function DashboardPage() {
     toggleVideo,
     toggleAudio,
   } = useMedia()
+
+  const {
+    users,
+    isConnecting,
+    socket: voiceSocket,
+    isMuted,
+    isVideoOn,
+    handleToggleMute,
+    handleToggleVideo,
+    handleLeaveRoom,
+  } = useVoiceRoom({
+    roomId: selectedRoom?.id || '',
+    userId: user?.id || '',
+    webrtcService: webrtcRef.current,
+  });
 
   // Cleanup function to remove user from all rooms
   const cleanup = async () => {
@@ -134,7 +151,13 @@ export default function DashboardPage() {
     // Update peer streams when they change
     const interval = setInterval(() => {
       const streams = webrtcRef.current.getPeerStreams();
-      setPeerStreams(new Map(streams));
+      setPeerStreams(prevStreams => {
+        const newStreams = new Map(prevStreams);
+        streams.forEach((stream, peerId) => {
+          newStreams.set(peerId, stream);
+        });
+        return newStreams;
+      });
     }, 1000);
 
     return () => {
@@ -171,12 +194,12 @@ export default function DashboardPage() {
   return (
     <div className="h-[calc(100vh-2rem)] flex gap-4">
       {/* Rooms List */}
-      <div className="w-64 bg-muted/30 rounded-lg p-4">
+      <div className="w-64 bg-muted/30 rounded-lg p-4 flex flex-col">
         <h2 className="font-semibold mb-4 flex items-center gap-2">
           <Users className="h-4 w-4" />
           Voice Rooms
         </h2>
-        <div className="space-y-4">
+        <div className="space-y-4 flex-1">
           {rooms.map((room) => (
             <div key={room.id} className="space-y-2">
               <button
@@ -215,6 +238,19 @@ export default function DashboardPage() {
             </div>
           ))}
         </div>
+
+        {/* Voice controls at the bottom of channels */}
+        {selectedRoom && (
+          <div className="pt-4 border-t mt-4">
+            <VoiceControls
+              isMuted={isMuted}
+              isVideoOn={isVideoOn}
+              onToggleMute={handleToggleMute}
+              onToggleVideo={handleToggleVideo}
+              onLeaveRoom={handleLeaveRoom}
+            />
+          </div>
+        )}
       </div>
 
       {selectedRoom ? (
