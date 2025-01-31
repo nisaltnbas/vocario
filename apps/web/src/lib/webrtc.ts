@@ -20,6 +20,11 @@ export class WebRTCService {
   }
 
   initialize(socket: Socket, roomId: string, userId: string) {
+    // Clean up existing connections before initializing new room
+    if (this.socket && this.roomId) {
+      this.leaveRoom();
+    }
+    
     this.socket = socket;
     this.roomId = roomId;
     this.userId = userId;
@@ -30,7 +35,7 @@ export class WebRTCService {
   async setLocalStream(stream: MediaStream) {
     this.localStream = stream;
     // Add local stream to all existing peer connections
-    for (const [peerId, peer] of this.peerConnections) {
+    for (const [peerId, peer] of Array.from(this.peerConnections.entries())) {
       this.addTracksToConnection(peer.connection);
     }
   }
@@ -120,11 +125,22 @@ export class WebRTCService {
   }
 
   private async handleNegotiationNeeded(peerId: string) {
-    const peer = this.peerConnections.get(peerId);
-    if (peer) {
-      const offer = await peer.connection.createOffer();
-      await peer.connection.setLocalDescription(offer);
+    try {
+      const pc = this.peerConnections.get(peerId);
+      if (!pc || pc.connection.signalingState === 'closed') return;
+
+      // Only proceed if we're in a stable state
+      if (pc.connection.signalingState !== 'stable') {
+        console.log('Connection not stable, skipping negotiation');
+        return;
+      }
+
+      // Create and set local description
+      const offer = await pc.connection.createOffer();
+      await pc.connection.setLocalDescription(offer);
       this.socket?.emit('offer', { to: peerId, offer });
+    } catch (error) {
+      console.error('Error during negotiation:', error);
     }
   }
 
@@ -143,17 +159,52 @@ export class WebRTCService {
 
   getPeerStreams(): Map<string, MediaStream | null> {
     const streams = new Map<string, MediaStream | null>();
-    for (const [peerId, peer] of this.peerConnections) {
+    for (const [peerId, peer] of Array.from(this.peerConnections.entries())) {
       streams.set(peerId, peer.stream);
     }
     return streams;
   }
 
-  cleanup() {
-    for (const [peerId, peer] of this.peerConnections) {
-      peer.connection.close();
+  leaveRoom() {
+    if (this.socket && this.roomId) {
+      // Notify server that we're leaving the room
+      this.socket.emit('leave-room', { roomId: this.roomId, userId: this.userId });
+      
+      // Stop all tracks in the local stream
+      if (this.localStream) {
+        this.localStream.getTracks().forEach(track => {
+          track.stop();
+        });
+        this.localStream = null;
+      }
+
+      // Clean up all peer connections
+      for (const [peerId, peer] of Array.from(this.peerConnections.entries())) {
+        // Stop all remote tracks
+        if (peer.stream) {
+          peer.stream.getTracks().forEach(track => {
+            track.stop();
+          });
+          peer.stream = null;
+        }
+        
+        // Remove all tracks from the connection
+        peer.connection.getSenders().forEach(sender => {
+          peer.connection.removeTrack(sender);
+        });
+        
+        peer.connection.close();
+        this.peerConnections.delete(peerId);
+      }
+
+      // Reset room state
+      this.roomId = '';
+      this.peerConnections.clear();
     }
-    this.peerConnections.clear();
+  }
+
+  cleanup() {
+    this.leaveRoom();
     this.localStream = null;
     this.socket = null;
   }

@@ -346,4 +346,39 @@ export const removeFromAllRooms = async (userId: string) => {
     console.error('Failed to remove user from rooms:', error);
     throw error;
   }
+};
+
+export const getRoomUsers = async (roomId: string): Promise<RoomUser[]> => {
+  const { data: roomUsers, error } = await supabase
+    .from('room_users')
+    .select(`
+      id,
+      room_id,
+      user_id,
+      joined_at,
+      profile:profiles!inner (
+        id,
+        username,
+        avatar_url,
+        created_at,
+        updated_at
+      )
+    `)
+    .eq('room_id', roomId) as { data: DatabaseRoomUser[] | null; error: any };
+
+  if (error) {
+    console.error('Error fetching room users:', error);
+    return [];
+  }
+
+  if (!roomUsers) {
+    return [];
+  }
+
+  return roomUsers.map(user => ({
+    ...user,
+    isInCall: false,
+    isVideoOn: false,
+    isMuted: false
+  }));
 }; 
