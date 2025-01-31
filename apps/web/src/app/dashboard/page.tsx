@@ -20,6 +20,9 @@ export default function DashboardPage() {
   const [rooms, setRooms] = useState<Room[]>([])
   const [peerStreams, setPeerStreams] = useState<Map<string, MediaStream | null>>(new Map())
   const [isVideoEnabled, setIsVideoEnabled] = useState(false)
+  const [messages, setMessages] = useState<Map<string, Array<{ userId: string; username: string; text: string; timestamp: number }>>>(new Map())
+  const [messageInput, setMessageInput] = useState("")
+  const messagesEndRef = useRef<HTMLDivElement>(null)
   const webrtcRef = useRef<WebRTCService>(new WebRTCService())
 
   const {
@@ -65,6 +68,28 @@ export default function DashboardPage() {
     // Socket.io bağlantısını kur
     const newSocket = io("http://localhost:3001")
     setSocket(newSocket)
+
+    // Chat mesajlarını dinle
+    newSocket.on('chat-message', ({ roomId, userId, username, text, timestamp }) => {
+      setMessages(prev => {
+        const newMessages = new Map(prev)
+        const roomMessages = newMessages.get(roomId) || []
+        newMessages.set(roomId, [...roomMessages, { userId, username, text, timestamp }])
+        return newMessages
+      })
+    })
+
+    // Oda mesaj geçmişini al
+    newSocket.on('chat-history', ({ messages }) => {
+      if (messages && messages.length > 0) {
+        const roomId = messages[0].roomId
+        setMessages(prev => {
+          const newMessages = new Map(prev)
+          newMessages.set(roomId, messages)
+          return newMessages
+        })
+      }
+    })
 
     // Kullanıcı bilgilerini al
     const getUser = async () => {
@@ -178,6 +203,30 @@ export default function DashboardPage() {
     }
   }, [selectedRoom])
 
+  // Otomatik scroll
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!messageInput.trim() || !selectedRoom || !currentUser || !socket) return
+
+    const messageData = {
+      roomId: selectedRoom.id,
+      userId: currentUser.id,
+      username: currentUser.user_metadata.username,
+      text: messageInput.trim(),
+      timestamp: Date.now()
+    }
+
+    // Mesajı socket üzerinden gönder
+    socket.emit('chat-message', messageData)
+
+    // Input'u temizle
+    setMessageInput("")
+  }
+
   const handleRoomClick = async (room: Room) => {
     if (!user) return
     
@@ -268,24 +317,32 @@ export default function DashboardPage() {
         
         {/* Chat Messages Area */}
         <div className="flex-1 p-4 space-y-4 overflow-auto">
-          <div className="bg-background p-3 rounded-lg">
-            <p className="text-sm font-medium">User 1</p>
-            <p className="text-sm">Hello everyone!</p>
-          </div>
-          <div className="bg-background p-3 rounded-lg">
-            <p className="text-sm font-medium">User 2</p>
-            <p className="text-sm">Hi there!</p>
-          </div>
+          {selectedRoom && messages.get(selectedRoom.id)?.map((message, index) => (
+            <div 
+              key={index} 
+              className={`p-3 rounded-lg ${
+                message.userId === currentUser?.id 
+                  ? 'bg-primary text-primary-foreground ml-auto' 
+                  : 'bg-background'
+              } max-w-[80%]`}
+            >
+              <p className="text-sm font-medium">{message.username}</p>
+              <p className="text-sm">{message.text}</p>
+            </div>
+          ))}
+          <div ref={messagesEndRef} />
         </div>
 
         {/* Chat Input */}
-        <div className="p-4 border-t">
+        <form onSubmit={handleSendMessage} className="p-4 border-t">
           <input
             type="text"
+            value={messageInput}
+            onChange={(e) => setMessageInput(e.target.value)}
             placeholder="Type a message..."
             className="w-full p-2 rounded-md bg-background"
           />
-        </div>
+        </form>
       </div>
 
       {/* Video Section - Only show when enabled */}

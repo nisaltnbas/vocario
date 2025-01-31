@@ -20,7 +20,17 @@ interface User {
   roomId: string;
 }
 
+interface ChatMessage {
+  roomId: string;
+  userId: string;
+  username: string;
+  text: string;
+  timestamp: number;
+}
+
 const users = new Map<string, User>();
+// Her oda için mesajları tutan Map
+const roomMessages = new Map<string, ChatMessage[]>();
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -44,6 +54,10 @@ io.on('connection', (socket) => {
     
     // Send list of other users to the joining user
     socket.emit('room-users', { users: otherUsers });
+
+    // Odanın mevcut mesajlarını gönder
+    const messages = roomMessages.get(roomId) || [];
+    socket.emit('chat-history', { messages });
   });
 
   socket.on('leave-room', ({ roomId, userId }) => {
@@ -57,6 +71,20 @@ io.on('connection', (socket) => {
     
     // Notify others
     socket.to(roomId).emit('user-left', { userId });
+  });
+
+  // Chat mesajlarını işle
+  socket.on('chat-message', (message: ChatMessage) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    // Mesajı odanın mesaj geçmişine ekle
+    const messages = roomMessages.get(message.roomId) || [];
+    messages.push(message);
+    roomMessages.set(message.roomId, messages);
+
+    // Odadaki herkese mesajı gönder (gönderen dahil)
+    io.to(message.roomId).emit('chat-message', message);
   });
 
   // WebRTC Signaling
