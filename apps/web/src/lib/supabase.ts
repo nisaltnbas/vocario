@@ -325,4 +325,25 @@ export const leaveRoom = async (roomId: string, userId: string) => {
     console.error('Failed to leave room:', error);
     throw error;
   }
+};
+
+export const removeFromAllRooms = async (userId: string) => {
+  try {
+    console.log('Removing user from all rooms:', userId);
+    
+    const { error } = await supabase
+      .from('room_users')
+      .delete()
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('Error removing user from rooms:', error);
+      throw error;
+    }
+
+    console.log('Successfully removed user from all rooms');
+  } catch (error) {
+    console.error('Failed to remove user from rooms:', error);
+    throw error;
+  }
 }; 

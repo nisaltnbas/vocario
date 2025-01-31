@@ -9,39 +9,90 @@ app.use(cors());
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
-    methods: ['GET', 'POST'],
-  },
+    origin: "http://localhost:3000",
+    methods: ["GET", "POST"]
+  }
 });
 
-interface RoomUser {
+interface User {
   socketId: string;
   userId: string;
   roomId: string;
 }
 
-const users: RoomUser[] = [];
+const users = new Map<string, User>();
 
 io.on('connection', (socket) => {
-  const { userId, roomId } = socket.handshake.auth;
+  console.log('User connected:', socket.id);
 
-  console.log(`User ${userId} connected to room ${roomId}`);
+  socket.on('join-room', ({ roomId, userId }) => {
+    console.log(`User ${userId} joining room ${roomId}`);
+    
+    // Store user info
+    users.set(socket.id, { socketId: socket.id, userId, roomId });
+    
+    // Join socket.io room
+    socket.join(roomId);
+    
+    // Notify others in the room
+    socket.to(roomId).emit('user-joined', { userId });
+    
+    // Get list of other users in the room
+    const otherUsers = Array.from(users.values())
+      .filter(user => user.roomId === roomId && user.socketId !== socket.id)
+      .map(user => user.userId);
+    
+    // Send list of other users to the joining user
+    socket.emit('room-users', { users: otherUsers });
+  });
 
-  // Join the room
-  socket.join(roomId);
+  socket.on('leave-room', ({ roomId, userId }) => {
+    console.log(`User ${userId} leaving room ${roomId}`);
+    
+    // Remove user from storage
+    users.delete(socket.id);
+    
+    // Leave socket.io room
+    socket.leave(roomId);
+    
+    // Notify others
+    socket.to(roomId).emit('user-left', { userId });
+  });
 
-  // Notify others in the room
-  socket.to(roomId).emit('userJoined', { userId });
+  // WebRTC Signaling
+  socket.on('offer', ({ to, offer }) => {
+    const user = users.get(socket.id);
+    if (user) {
+      socket.to(user.roomId).emit('offer', { from: user.userId, offer });
+    }
+  });
 
-  // Handle disconnection
+  socket.on('answer', ({ to, answer }) => {
+    const user = users.get(socket.id);
+    if (user) {
+      socket.to(user.roomId).emit('answer', { from: user.userId, answer });
+    }
+  });
+
+  socket.on('ice-candidate', ({ to, candidate }) => {
+    const user = users.get(socket.id);
+    if (user) {
+      socket.to(user.roomId).emit('ice-candidate', { from: user.userId, candidate });
+    }
+  });
+
   socket.on('disconnect', () => {
-    console.log(`User ${userId} disconnected from room ${roomId}`);
-    socket.to(roomId).emit('userLeft', { userId });
+    console.log('User disconnected:', socket.id);
+    
+    const user = users.get(socket.id);
+    if (user) {
+      socket.to(user.roomId).emit('user-left', { userId: user.userId });
+      users.delete(socket.id);
+    }
   });
 });
 
 const PORT = process.env.PORT || 3001;
-
 httpServer.listen(PORT, () => {
-  console.log(`Socket.IO server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 }); 

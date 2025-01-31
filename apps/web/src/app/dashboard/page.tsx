@@ -1,14 +1,14 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { Mic, MicOff, Video, VideoOff, Users, MessageSquare, Hash } from "lucide-react"
 import { io } from "socket.io-client"
 import { useMedia } from "@/hooks/useMedia"
-import { useWebRTC } from "@/hooks/useWebRTC"
 import { VideoPlayer } from "@/components/video-player"
 import { supabase } from "@/lib/supabase"
-import { Room, getRoomsWithUsers, joinRoom, subscribeToAllRooms } from "@/lib/supabase"
+import { Room, getRoomsWithUsers, joinRoom, subscribeToAllRooms, removeFromAllRooms } from "@/lib/supabase"
 import { useUser } from '@/components/providers/user-provider'
+import { WebRTCService } from "@/lib/webrtc"
 
 export default function DashboardPage() {
   const { user } = useUser()
@@ -16,6 +16,8 @@ export default function DashboardPage() {
   const [socket, setSocket] = useState<any>(null)
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [rooms, setRooms] = useState<Room[]>([])
+  const [peerStreams, setPeerStreams] = useState<Map<string, MediaStream>>(new Map())
+  const webrtcRef = useRef<WebRTCService>(new WebRTCService())
 
   const {
     stream: localStream,
@@ -27,7 +29,19 @@ export default function DashboardPage() {
     toggleAudio,
   } = useMedia()
 
-  const { peers } = useWebRTC(selectedRoom?.id || '', currentUser?.id || '')
+  // Cleanup function to remove user from all rooms
+  const cleanup = async () => {
+    if (user) {
+      console.log('Cleaning up user data...');
+      try {
+        await removeFromAllRooms(user.id);
+        setSelectedRoom(null);
+        webrtcRef.current.cleanup();
+      } catch (error) {
+        console.error('Error during cleanup:', error);
+      }
+    }
+  };
 
   useEffect(() => {
     // Socket.io bağlantısını kur
@@ -43,13 +57,35 @@ export default function DashboardPage() {
     }
     getUser()
 
+    // Add cleanup on page unload
+    const handleBeforeUnload = () => {
+      if (user) {
+        removeFromAllRooms(user.id);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
-      newSocket.close()
+      newSocket.close();
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      cleanup();
     }
-  }, [])
+  }, [user])
+
+  // Watch for user changes (login/logout)
+  useEffect(() => {
+    if (!user) {
+      setSelectedRoom(null);
+      setRooms([]);
+      webrtcRef.current.cleanup();
+    }
+  }, [user]);
 
   // Initial room fetch and subscription setup
   useEffect(() => {
+    if (!user) return;
+
     const fetchRooms = async () => {
       console.log('Fetching initial rooms...')
       try {
@@ -82,7 +118,32 @@ export default function DashboardPage() {
       console.log('Cleaning up room subscription...')
       unsubscribe()
     }
-  }, [])
+  }, [user])
+
+  // Handle WebRTC when room or stream changes
+  useEffect(() => {
+    if (!selectedRoom || !socket || !user || !localStream) return;
+
+    // Initialize WebRTC
+    webrtcRef.current.initialize(socket, selectedRoom.id, user.id);
+    webrtcRef.current.setLocalStream(localStream);
+
+    // Join room in socket.io
+    socket.emit('join-room', { roomId: selectedRoom.id, userId: user.id });
+
+    // Update peer streams when they change
+    const interval = setInterval(() => {
+      const streams = webrtcRef.current.getPeerStreams();
+      setPeerStreams(new Map(streams));
+    }, 1000);
+
+    return () => {
+      clearInterval(interval);
+      if (selectedRoom) {
+        socket.emit('leave-room', { roomId: selectedRoom.id, userId: user.id });
+      }
+    };
+  }, [selectedRoom, socket, user, localStream]);
 
   // Oda seçildiğinde medya akışını başlat
   useEffect(() => {
@@ -161,20 +222,25 @@ export default function DashboardPage() {
           {/* Video Grid */}
           <div className="flex-1 grid grid-cols-2 gap-4 p-4">
             {/* Local Video */}
-            <VideoPlayer
-              stream={localStream}
-              isMuted={true}
-              username={`${currentUser?.user_metadata?.username || 'You'} (You)`}
-            />
+            {localStream && (
+              <VideoPlayer
+                stream={localStream}
+                isMuted={true}
+                username={`${currentUser?.user_metadata?.username || 'You'} (You)`}
+              />
+            )}
 
             {/* Remote Videos */}
-            {Array.from(peers.values()).map((peer) => (
-              <VideoPlayer
-                key={peer.userId}
-                stream={peer.stream || null}
-                username={`User ${peer.userId}`}
-              />
-            ))}
+            {Array.from(peerStreams.entries()).map(([peerId, stream]) => {
+              const peerUser = currentRoom?.users.find(u => u.user_id === peerId);
+              return (
+                <VideoPlayer
+                  key={peerId}
+                  stream={stream}
+                  username={peerUser?.profile.username || `User ${peerId}`}
+                />
+              );
+            })}
           </div>
 
           {/* Controls */}

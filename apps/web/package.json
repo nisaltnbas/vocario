@@ -19,6 +19,7 @@
     "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@supabase/supabase-js": "^2.48.1",
     "@types/simple-peer": "^9.11.8",
+    "@types/webrtc": "^0.0.44",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "lucide-react": "^0.323.0",
