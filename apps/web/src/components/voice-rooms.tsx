@@ -55,12 +55,15 @@ export function VoiceRooms({ userId }: VoiceRoomsProps) {
           schema: 'public',
           table: 'room_users'
         },
-        async () => {
+        async (payload) => {
+          console.log('Room users changed:', payload);
           const updatedRooms = await getRoomsWithUsers();
           setRooms(updatedRooms);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Subscription status:', status);
+      });
 
     return () => {
       roomsSubscription.unsubscribe();
@@ -82,8 +85,10 @@ export function VoiceRooms({ userId }: VoiceRoomsProps) {
   const handleJoinRoom = async (roomId: string) => {
     try {
       setIsJoining(true);
+      console.log('Attempting to join/leave room:', { roomId, userId });
 
       if (activeRoom === roomId) {
+        console.log('Leaving current room');
         // Leave current room
         await leaveRoom(roomId, userId);
         setActiveRoom(null);
@@ -91,36 +96,61 @@ export function VoiceRooms({ userId }: VoiceRoomsProps) {
         // Stop media streams
         localStream?.getTracks().forEach(track => track.stop());
       } else {
+        console.log('Joining new room');
         // Leave current room if any
         if (activeRoom) {
+          console.log('Leaving previous room first:', activeRoom);
           await leaveRoom(activeRoom, userId);
           localStream?.getTracks().forEach(track => track.stop());
         }
 
         // Initialize media before joining
+        console.log('Initializing media');
         await initializeMedia(true, true);
         
         // Join new room
-        await joinRoom(roomId, userId);
-        setActiveRoom(roomId);
+        console.log('Attempting to join room:', { roomId, userId });
+        try {
+          const joinResult = await joinRoom(roomId, userId);
+          console.log('Join result:', joinResult);
+          setActiveRoom(roomId);
 
-        // Initialize calls with existing users in the room
-        const currentRoom = rooms.find(r => r.id === roomId);
-        if (currentRoom) {
-          currentRoom.users
-            .filter(u => u.user_id !== userId)
-            .forEach(user => initiateCall(user.user_id));
+          // Initialize calls with existing users in the room
+          const currentRoom = rooms.find(r => r.id === roomId);
+          if (currentRoom) {
+            console.log('Current room users:', currentRoom.users);
+            currentRoom.users
+              .filter(u => u.user_id !== userId)
+              .forEach(user => {
+                console.log('Initiating call with user:', user);
+                initiateCall(user.user_id);
+              });
+          }
+        } catch (joinError) {
+          console.error('Error joining room:', joinError);
+          toast({
+            title: 'Error',
+            description: 'Failed to join room. Please try again.',
+            variant: 'destructive',
+          });
+          return;
         }
       }
 
       // Refresh rooms
-      const updatedRooms = await getRoomsWithUsers();
-      setRooms(updatedRooms);
+      console.log('Refreshing rooms list');
+      try {
+        const updatedRooms = await getRoomsWithUsers();
+        console.log('Updated rooms:', updatedRooms);
+        setRooms(updatedRooms);
+      } catch (refreshError) {
+        console.error('Error refreshing rooms:', refreshError);
+      }
     } catch (error) {
       console.error('Failed to join/leave room:', error);
       toast({
         title: 'Error',
-        description: 'Failed to join/leave room',
+        description: 'Failed to join/leave room. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -161,6 +191,37 @@ export function VoiceRooms({ userId }: VoiceRoomsProps) {
                 </span>
               </div>
 
+              {/* Room Users List - Always show users */}
+              <div className="pl-6 space-y-1">
+                {room.users.map((user) => (
+                  <div
+                    key={user.id}
+                    className="flex items-center justify-between text-sm p-1"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-green-500" />
+                      <span className={user.user_id === userId ? 'font-medium' : ''}>
+                        {user.profile.username}
+                        {user.user_id === userId && ' (You)'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {user.isMuted ? (
+                        <MicOff className="w-3 h-3 text-gray-400" />
+                      ) : (
+                        <Mic className="w-3 h-3 text-green-500" />
+                      )}
+                      {user.isVideoOn ? (
+                        <Video className="w-3 h-3 text-green-500" />
+                      ) : (
+                        <VideoOff className="w-3 h-3 text-gray-400" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Active Room Controls and Video Grid */}
               {isActive && (
                 <div className="pl-6 space-y-4">
                   {/* Controls */}
@@ -223,36 +284,6 @@ export function VoiceRooms({ userId }: VoiceRoomsProps) {
                         />
                         <div className="absolute bottom-2 left-2 text-white text-sm bg-black/50 px-2 py-1 rounded">
                           {room.users.find(u => u.user_id === peer.userId)?.profile.username}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* User list */}
-                  <div className="space-y-1">
-                    {room.users.map((user) => (
-                      <div
-                        key={user.id}
-                        className="flex items-center justify-between text-sm p-1"
-                      >
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full bg-green-500" />
-                          <span className={user.user_id === userId ? 'font-medium' : ''}>
-                            {user.profile.username}
-                            {user.user_id === userId && ' (You)'}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {user.isMuted ? (
-                            <MicOff className="w-3 h-3 text-gray-400" />
-                          ) : (
-                            <Mic className="w-3 h-3 text-green-500" />
-                          )}
-                          {user.isVideoOn ? (
-                            <Video className="w-3 h-3 text-green-500" />
-                          ) : (
-                            <VideoOff className="w-3 h-3 text-gray-400" />
-                          )}
                         </div>
                       </div>
                     ))}

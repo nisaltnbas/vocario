@@ -1,0 +1,322 @@
+import { Socket } from 'socket.io-client';
+import { supabase } from './supabase';
+
+interface PeerConnection {
+  userId: string;
+  connection: RTCPeerConnection;
+  stream: MediaStream | null;
+}
+
+export class WebRTCService {
+  private peerConnections: Map<string, PeerConnection> = new Map();
+  private localStream: MediaStream | null = null;
+  private socket: Socket | null = null;
+  private roomId: string = '';
+  private userId: string = '';
+  private isVideoEnabled: boolean = false;
+  private isAudioEnabled: boolean = true;
+  private isPageVisible: boolean = true;
+
+  constructor() {
+    this.handleIceCandidate = this.handleIceCandidate.bind(this);
+    this.handleTrack = this.handleTrack.bind(this);
+    this.handleNegotiationNeeded = this.handleNegotiationNeeded.bind(this);
+    this.handleVisibilityChange = this.handleVisibilityChange.bind(this);
+
+    // Add visibility change listener
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      this.isPageVisible = !document.hidden;
+    }
+  }
+
+  private handleVisibilityChange() {
+    this.isPageVisible = !document.hidden;
+    
+    if (this.localStream) {
+      const videoTracks = this.localStream.getVideoTracks();
+      const audioTracks = this.localStream.getAudioTracks();
+      
+      if (this.isPageVisible) {
+        // Restore both video and audio tracks to their previous states
+        videoTracks.forEach(track => {
+          track.enabled = this.isVideoEnabled;
+        });
+        audioTracks.forEach(track => {
+          track.enabled = this.isAudioEnabled;
+        });
+      } else {
+        // Only pause video if needed, keep audio in its current state
+        if (this.isVideoEnabled) {
+          videoTracks.forEach(track => {
+            track.enabled = false;
+          });
+        }
+        // Keep audio tracks in their current state
+        audioTracks.forEach(track => {
+          track.enabled = this.isAudioEnabled;
+        });
+      }
+    }
+  }
+
+  initialize(socket: Socket, roomId: string, userId: string) {
+    // Clean up existing connections before initializing new room
+    if (this.socket && this.roomId) {
+      this.leaveRoom();
+    }
+    
+    this.socket = socket;
+    this.roomId = roomId;
+    this.userId = userId;
+
+    this.setupSocketListeners();
+  }
+
+  async setLocalStream(stream: MediaStream) {
+    this.localStream = stream;
+    // Set initial states
+    this.isVideoEnabled = stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
+    this.isAudioEnabled = stream.getAudioTracks().length > 0 && stream.getAudioTracks()[0].enabled;
+    
+    // Add local stream to all existing peer connections
+    for (const [peerId, peer] of Array.from(this.peerConnections.entries())) {
+      this.addTracksToConnection(peer.connection);
+    }
+  }
+
+  private async checkFriendship(otherUserId: string): Promise<boolean> {
+    if (!this.userId) return false;
+
+    const { data: friendships } = await supabase
+      .from('friendships')
+      .select('*')
+      .or(
+        `and(sender_id.eq.${this.userId},receiver_id.eq.${otherUserId}),` +
+        `and(sender_id.eq.${otherUserId},receiver_id.eq.${this.userId})`
+      )
+      .eq('status', 'ACCEPTED')
+      .maybeSingle();
+
+    return !!friendships;
+  }
+
+  private setupSocketListeners() {
+    if (!this.socket) return;
+
+    this.socket.on('user-joined', async ({ userId }: { userId: string }) => {
+      console.log('User joined:', userId);
+      // Check if users are friends before creating peer connection
+      const areFriends = await this.checkFriendship(userId);
+      if (areFriends) {
+        await this.createPeerConnection(userId);
+      } else {
+        console.log('Skipping peer connection - users are not friends');
+      }
+    });
+
+    this.socket.on('user-left', ({ userId }: { userId: string }) => {
+      console.log('User left:', userId);
+      this.removePeerConnection(userId);
+    });
+
+    this.socket.on('offer', async ({ from, offer }: { from: string; offer: RTCSessionDescriptionInit }) => {
+      console.log('Received offer from:', from);
+      // Check if users are friends before accepting the offer
+      const areFriends = await this.checkFriendship(from);
+      if (areFriends) {
+        const pc = await this.createPeerConnection(from);
+        await pc.connection.setRemoteDescription(offer);
+        const answer = await pc.connection.createAnswer();
+        await pc.connection.setLocalDescription(answer);
+        this.socket?.emit('answer', { to: from, answer });
+      } else {
+        console.log('Rejecting offer - users are not friends');
+      }
+    });
+
+    this.socket.on('answer', async ({ from, answer }: { from: string; answer: RTCSessionDescriptionInit }) => {
+      console.log('Received answer from:', from);
+      const pc = this.peerConnections.get(from);
+      if (pc) {
+        await pc.connection.setRemoteDescription(answer);
+      }
+    });
+
+    this.socket.on('ice-candidate', async ({ from, candidate }: { from: string; candidate: RTCIceCandidateInit }) => {
+      console.log('Received ICE candidate from:', from);
+      const pc = this.peerConnections.get(from);
+      if (pc) {
+        await pc.connection.addIceCandidate(candidate);
+      }
+    });
+  }
+
+  private async createPeerConnection(peerId: string): Promise<PeerConnection> {
+    if (this.peerConnections.has(peerId)) {
+      return this.peerConnections.get(peerId)!;
+    }
+
+    const config: RTCConfiguration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ],
+    };
+
+    const connection = new RTCPeerConnection(config);
+    const peer: PeerConnection = {
+      userId: peerId,
+      connection,
+      stream: null,
+    };
+
+    connection.onicecandidate = (event) => this.handleIceCandidate(peerId, event);
+    connection.ontrack = (event) => this.handleTrack(peerId, event);
+    connection.onnegotiationneeded = () => this.handleNegotiationNeeded(peerId);
+
+    this.peerConnections.set(peerId, peer);
+    this.addTracksToConnection(connection);
+
+    return peer;
+  }
+
+  private addTracksToConnection(connection: RTCPeerConnection) {
+    if (this.localStream) {
+      for (const track of this.localStream.getTracks()) {
+        connection.addTrack(track, this.localStream);
+      }
+    }
+  }
+
+  private removePeerConnection(peerId: string) {
+    const peer = this.peerConnections.get(peerId);
+    if (peer) {
+      peer.connection.close();
+      this.peerConnections.delete(peerId);
+    }
+  }
+
+  private async handleNegotiationNeeded(peerId: string) {
+    try {
+      const pc = this.peerConnections.get(peerId);
+      if (!pc || pc.connection.signalingState === 'closed') return;
+
+      // Only proceed if we're in a stable state
+      if (pc.connection.signalingState !== 'stable') {
+        console.log('Connection not stable, skipping negotiation');
+        return;
+      }
+
+      // Create and set local description
+      const offer = await pc.connection.createOffer();
+      await pc.connection.setLocalDescription(offer);
+      this.socket?.emit('offer', { to: peerId, offer });
+    } catch (error) {
+      console.error('Error during negotiation:', error);
+    }
+  }
+
+  private handleIceCandidate(peerId: string, event: RTCPeerConnectionIceEvent) {
+    if (event.candidate) {
+      this.socket?.emit('ice-candidate', { to: peerId, candidate: event.candidate });
+    }
+  }
+
+  private handleTrack(peerId: string, event: RTCTrackEvent) {
+    const peer = this.peerConnections.get(peerId);
+    if (peer) {
+      peer.stream = event.streams[0];
+    }
+  }
+
+  getPeerStreams(): Map<string, MediaStream | null> {
+    const streams = new Map<string, MediaStream | null>();
+    for (const [peerId, peer] of Array.from(this.peerConnections.entries())) {
+      streams.set(peerId, peer.stream);
+    }
+    return streams;
+  }
+
+  leaveRoom() {
+    if (this.socket && this.roomId) {
+      // Notify server that we're leaving the room
+      this.socket.emit('leave-room', { roomId: this.roomId, userId: this.userId });
+      
+      // Stop all tracks in the local stream
+      if (this.localStream) {
+        this.localStream.getTracks().forEach(track => {
+          track.stop();
+        });
+        this.localStream = null;
+      }
+
+      // Clean up all peer connections
+      for (const [peerId, peer] of Array.from(this.peerConnections.entries())) {
+        // Stop all remote tracks
+        if (peer.stream) {
+          peer.stream.getTracks().forEach(track => {
+            track.stop();
+          });
+          peer.stream = null;
+        }
+        
+        // Remove all tracks from the connection
+        peer.connection.getSenders().forEach(sender => {
+          peer.connection.removeTrack(sender);
+        });
+        
+        peer.connection.close();
+        this.peerConnections.delete(peerId);
+      }
+
+      // Reset room state
+      this.roomId = '';
+      this.peerConnections.clear();
+    }
+  }
+
+  cleanup() {
+    this.leaveRoom();
+    this.localStream = null;
+    this.socket = null;
+    
+    // Remove visibility change listener
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    }
+  }
+
+  toggleMute() {
+    if (this.localStream) {
+      const audioTracks = this.localStream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        this.isAudioEnabled = !this.isAudioEnabled;
+        audioTracks.forEach(track => {
+          track.enabled = this.isAudioEnabled;
+        });
+      }
+    }
+    return this.isAudioEnabled;
+  }
+
+  toggleVideo() {
+    if (this.localStream) {
+      const videoTracks = this.localStream.getVideoTracks();
+      if (videoTracks.length > 0) {
+        this.isVideoEnabled = !this.isVideoEnabled;
+        videoTracks.forEach(track => {
+          track.enabled = this.isVideoEnabled;
+        });
+      }
+    }
+    return this.isVideoEnabled;
+  }
+
+  getMediaState() {
+    return {
+      isVideoEnabled: this.isVideoEnabled,
+      isAudioEnabled: this.isAudioEnabled
+    };
+  }
+} 

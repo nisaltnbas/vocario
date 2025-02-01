@@ -1,54 +1,64 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { getRoomUsers, joinRoom, leaveRoom, RoomUser } from '@/lib/supabase';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
 
 interface UseVoiceRoomProps {
   roomId: string;
   userId: string;
+  webrtcService?: any; // Replace with proper type
 }
 
-export const useVoiceRoom = ({ roomId, userId }: UseVoiceRoomProps) => {
+export const useVoiceRoom = ({ roomId, userId, webrtcService }: UseVoiceRoomProps) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [users, setUsers] = useState<RoomUser[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOn, setIsVideoOn] = useState(false);
   const { toast } = useToast();
+  const router = useRouter();
 
-  // Fetch all room users initially and on changes
-  useEffect(() => {
-    const fetchRoomUsers = async () => {
+  const handleLeaveRoom = useCallback(async () => {
+    if (roomId && userId) {
       try {
-        const allRoomUsers = await getRoomUsers('');
-        setUsers(allRoomUsers || []);
-      } catch (error) {
-        console.error('Failed to fetch room users:', error);
-      }
-    };
-
-    fetchRoomUsers();
-    
-    // Subscribe to room_users changes
-    const roomUsersSubscription = supabase
-      .channel('room_users_channel')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'room_users'
-        },
-        async () => {
-          const allRoomUsers = await getRoomUsers('');
-          setUsers(allRoomUsers || []);
+        await leaveRoom(roomId, userId);
+        if (socket) {
+          socket.emit('leave-room', { roomId, userId });
         }
-      )
-      .subscribe();
+        if (webrtcService) {
+          webrtcService.leaveRoom();
+        }
+        router.push('/dashboard'); // Or wherever you want to redirect after leaving
+      } catch (error) {
+        console.error('Failed to leave room:', error);
+      }
+    }
+  }, [roomId, userId, socket, webrtcService, router]);
 
-    return () => {
-      roomUsersSubscription.unsubscribe();
-    };
-  }, []);
+  const handleToggleMute = useCallback(() => {
+    if (webrtcService) {
+      const isEnabled = webrtcService.toggleMute();
+      setIsMuted(!isEnabled);
+    }
+  }, [webrtcService]);
+
+  const handleToggleVideo = useCallback(() => {
+    if (webrtcService) {
+      const isEnabled = webrtcService.toggleVideo();
+      setIsVideoOn(isEnabled);
+    }
+  }, [webrtcService]);
+
+  // Update media state when webrtcService changes
+  useEffect(() => {
+    if (webrtcService) {
+      const mediaState = webrtcService.getMediaState();
+      setIsMuted(!mediaState.isAudioEnabled);
+      setIsVideoOn(mediaState.isVideoEnabled);
+    }
+  }, [webrtcService]);
 
   // Handle room joining/leaving
   useEffect(() => {
@@ -64,14 +74,9 @@ export const useVoiceRoom = ({ roomId, userId }: UseVoiceRoomProps) => {
     socketInstance.on('connect', async () => {
       setIsConnecting(true);
       try {
-        // Leave any existing rooms first
-        const currentRooms = users.filter(u => u.user_id === userId);
-        for (const room of currentRooms) {
-          await leaveRoom(room.room_id, userId);
-        }
-        
         // Join the new room
         await joinRoom(roomId, userId);
+        socketInstance.emit('join-room', { roomId, userId });
         setIsConnecting(false);
       } catch (error) {
         console.error('Failed to join room:', error);
@@ -87,16 +92,56 @@ export const useVoiceRoom = ({ roomId, userId }: UseVoiceRoomProps) => {
     setSocket(socketInstance);
 
     return () => {
-      if (roomId && userId) {
-        leaveRoom(roomId, userId).catch(console.error);
-      }
       socketInstance.disconnect();
     };
-  }, [roomId, userId, toast, users]);
+  }, [roomId, userId, toast]);
+
+  // Fetch room users for the current room only
+  useEffect(() => {
+    const fetchRoomUsers = async () => {
+      try {
+        const roomUsers = await getRoomUsers(roomId);
+        setUsers(roomUsers || []);
+      } catch (error) {
+        console.error('Failed to fetch room users:', error);
+      }
+    };
+
+    if (roomId) {
+      fetchRoomUsers();
+      
+      // Subscribe to current room changes only
+      const roomUsersSubscription = supabase
+        .channel(`room:${roomId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'room_users',
+            filter: `room_id=eq.${roomId}`
+          },
+          async () => {
+            const roomUsers = await getRoomUsers(roomId);
+            setUsers(roomUsers || []);
+          }
+        )
+        .subscribe();
+
+      return () => {
+        roomUsersSubscription.unsubscribe();
+      };
+    }
+  }, [roomId]);
 
   return {
     users,
     isConnecting,
     socket,
+    isMuted,
+    isVideoOn,
+    handleToggleMute,
+    handleToggleVideo,
+    handleLeaveRoom,
   };
 }; 

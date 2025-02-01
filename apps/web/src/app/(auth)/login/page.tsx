@@ -34,6 +34,11 @@ export default function LoginPage() {
 
       if (error) throw error
 
+      // Check if email is verified
+      if (!data.user.email_confirmed_at) {
+        throw new Error("Please verify your email before logging in. Check your inbox for the verification link.")
+      }
+
       toast({
         title: "Login successful",
         description: "Welcome back!",

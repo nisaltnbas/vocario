@@ -39,17 +39,35 @@ export default function RegisterPage() {
         email: formData.email,
         password: formData.password,
         options: {
-          data: {
-            username: formData.username,
-          },
-        },
+          emailRedirectTo: `${window.location.origin}/login`,
+        }
       })
 
       if (authError) throw authError
 
+      // Check if user was created and needs email verification
+      if (!authData.user?.identities?.length) {
+        throw new Error("Email already registered. Please check your inbox for verification email.")
+      }
+
+      // Create profile
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          id: authData.user.id,
+          username: formData.username,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+
+      if (profileError) {
+        console.error('Profile creation error:', profileError)
+        throw new Error(`Failed to create profile: ${profileError.message}`)
+      }
+
       toast({
         title: "Registration successful",
-        description: "Please check your email to verify your account.",
+        description: "Please check your email to verify your account. You can login after verification.",
       })
 
       // Redirect to login page after successful registration

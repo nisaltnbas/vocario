@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "pnpm --parallel -r dev",
-    "build": "pnpm --parallel -r build",
+    "dev": "nodemon src/index.ts",
+    "build": "tsc",
     "lint": "pnpm --parallel -r lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "clean": "pnpm -r clean"
+    "clean": "pnpm -r clean",
+    "start": "node dist/index.js"
   },
   "devDependencies": {
     "@types/node": "^20.11.16",
@@ -22,5 +23,9 @@
     "node": ">=18.0.0",
     "pnpm": ">=8.0.0"
   },
-  "packageManager": "pnpm@8.14.1"
+  "packageManager": "pnpm@8.14.1",
+  "compilerOptions": {
+    "target": "es2020",
+    "downlevelIteration": true
+  }
 } 
