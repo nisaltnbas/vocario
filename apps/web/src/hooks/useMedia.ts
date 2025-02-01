@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 
 interface UseMediaReturn {
   stream: MediaStream | null
@@ -14,6 +14,7 @@ export function useMedia(): UseMediaReturn {
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const streamRef = useRef<MediaStream | null>(null)
 
   const startMedia = async (video: boolean, audio: boolean) => {
     try {
@@ -22,9 +23,14 @@ export function useMedia(): UseMediaReturn {
 
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video,
-        audio,
+        audio: audio ? {
+          autoGainControl: false,
+          echoCancellation: true,
+          noiseSuppression: true,
+        } : false,
       })
 
+      streamRef.current = mediaStream
       setStream(mediaStream)
     } catch (err) {
       setError(err as Error)
@@ -34,15 +40,16 @@ export function useMedia(): UseMediaReturn {
   }
 
   const stopMedia = () => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop())
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
       setStream(null)
     }
   }
 
   const toggleVideo = () => {
-    if (stream) {
-      const videoTrack = stream.getVideoTracks()[0]
+    if (streamRef.current) {
+      const videoTrack = streamRef.current.getVideoTracks()[0]
       if (videoTrack) {
         videoTrack.enabled = !videoTrack.enabled
       }
@@ -50,16 +57,42 @@ export function useMedia(): UseMediaReturn {
   }
 
   const toggleAudio = () => {
-    if (stream) {
-      const audioTrack = stream.getAudioTracks()[0]
+    if (streamRef.current) {
+      const audioTrack = streamRef.current.getAudioTracks()[0]
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled
       }
     }
   }
 
+  // Handle page visibility changes
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (streamRef.current) {
+        const tracks = streamRef.current.getTracks()
+        
+        if (document.hidden) {
+          // When page is hidden, only disable video tracks if they exist
+          const videoTrack = tracks.find(track => track.kind === 'video')
+          if (videoTrack) {
+            videoTrack.enabled = false
+          }
+        } else {
+          // When page becomes visible again, restore previous track states
+          tracks.forEach(track => {
+            if (track.kind === 'video') {
+              track.enabled = true
+            }
+            // Audio tracks remain in their current state
+          })
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       stopMedia()
     }
   }, [])

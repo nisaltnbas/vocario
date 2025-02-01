@@ -14,11 +14,49 @@ export class WebRTCService {
   private userId: string = '';
   private isVideoEnabled: boolean = false;
   private isAudioEnabled: boolean = true;
+  private isPageVisible: boolean = true;
 
   constructor() {
     this.handleIceCandidate = this.handleIceCandidate.bind(this);
     this.handleTrack = this.handleTrack.bind(this);
     this.handleNegotiationNeeded = this.handleNegotiationNeeded.bind(this);
+    this.handleVisibilityChange = this.handleVisibilityChange.bind(this);
+
+    // Add visibility change listener
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      this.isPageVisible = !document.hidden;
+    }
+  }
+
+  private handleVisibilityChange() {
+    this.isPageVisible = !document.hidden;
+    
+    if (this.localStream) {
+      const videoTracks = this.localStream.getVideoTracks();
+      const audioTracks = this.localStream.getAudioTracks();
+      
+      if (this.isPageVisible) {
+        // Restore both video and audio tracks to their previous states
+        videoTracks.forEach(track => {
+          track.enabled = this.isVideoEnabled;
+        });
+        audioTracks.forEach(track => {
+          track.enabled = this.isAudioEnabled;
+        });
+      } else {
+        // Only pause video if needed, keep audio in its current state
+        if (this.isVideoEnabled) {
+          videoTracks.forEach(track => {
+            track.enabled = false;
+          });
+        }
+        // Keep audio tracks in their current state
+        audioTracks.forEach(track => {
+          track.enabled = this.isAudioEnabled;
+        });
+      }
+    }
   }
 
   initialize(socket: Socket, roomId: string, userId: string) {
@@ -213,6 +251,11 @@ export class WebRTCService {
     this.leaveRoom();
     this.localStream = null;
     this.socket = null;
+    
+    // Remove visibility change listener
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    }
   }
 
   toggleMute() {
