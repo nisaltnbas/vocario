@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState, useRef } from "react"
-import { Mic, MicOff, Video, VideoOff, Users, MessageSquare, Hash } from "lucide-react"
+import { Mic, MicOff, Video, VideoOff, Users, Hash } from "lucide-react"
 import { io } from "socket.io-client"
 import { useMedia } from "@/hooks/useMedia"
 import { VideoPlayer } from "@/components/video-player"
@@ -11,6 +11,7 @@ import { useUser } from '@/components/providers/user-provider'
 import { WebRTCService } from "@/lib/webrtc"
 import { VoiceControls } from '@/components/voice-controls'
 import { useVoiceRoom } from '@/hooks/useVoiceRoom'
+import { VoiceRoomView } from '@/components/voice-room-view'
 
 export default function DashboardPage() {
   const { user } = useUser()
@@ -20,9 +21,7 @@ export default function DashboardPage() {
   const [rooms, setRooms] = useState<Room[]>([])
   const [peerStreams, setPeerStreams] = useState<Map<string, MediaStream | null>>(new Map())
   const [isVideoEnabled, setIsVideoEnabled] = useState(false)
-  const [messages, setMessages] = useState<Map<string, Array<{ userId: string; username: string; text: string; timestamp: number }>>>(new Map())
-  const [messageInput, setMessageInput] = useState("")
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [isInCall, setIsInCall] = useState(false)
   const webrtcRef = useRef<WebRTCService>(new WebRTCService())
 
   const {
@@ -50,6 +49,27 @@ export default function DashboardPage() {
     webrtcService: webrtcRef.current,
   });
 
+  const handleJoinCall = async () => {
+    if (!selectedRoom || !user) return;
+    
+    try {
+      await startMedia(true, true);
+      setIsInCall(true);
+    } catch (error) {
+      console.error('Error joining call:', error);
+    }
+  };
+
+  const handleLeaveCall = async () => {
+    try {
+      await stopMedia();
+      setIsInCall(false);
+      handleLeaveRoom();
+    } catch (error) {
+      console.error('Error leaving call:', error);
+    }
+  };
+
   // Cleanup function to remove user from all rooms
   const cleanup = async () => {
     if (user) {
@@ -68,28 +88,6 @@ export default function DashboardPage() {
     // Socket.io bağlantısını kur
     const newSocket = io("http://localhost:3001")
     setSocket(newSocket)
-
-    // Chat mesajlarını dinle
-    newSocket.on('chat-message', ({ roomId, userId, username, text, timestamp }) => {
-      setMessages(prev => {
-        const newMessages = new Map(prev)
-        const roomMessages = newMessages.get(roomId) || []
-        newMessages.set(roomId, [...roomMessages, { userId, username, text, timestamp }])
-        return newMessages
-      })
-    })
-
-    // Oda mesaj geçmişini al
-    newSocket.on('chat-history', ({ messages }) => {
-      if (messages && messages.length > 0) {
-        const roomId = messages[0].roomId
-        setMessages(prev => {
-          const newMessages = new Map(prev)
-          newMessages.set(roomId, messages)
-          return newMessages
-        })
-      }
-    })
 
     // Kullanıcı bilgilerini al
     const getUser = async () => {
@@ -203,30 +201,6 @@ export default function DashboardPage() {
     }
   }, [selectedRoom])
 
-  // Otomatik scroll
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  const handleSendMessage = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!messageInput.trim() || !selectedRoom || !currentUser || !socket) return
-
-    const messageData = {
-      roomId: selectedRoom.id,
-      userId: currentUser.id,
-      username: currentUser.user_metadata.username,
-      text: messageInput.trim(),
-      timestamp: Date.now()
-    }
-
-    // Mesajı socket üzerinden gönder
-    socket.emit('chat-message', messageData)
-
-    // Input'u temizle
-    setMessageInput("")
-  }
-
   const handleRoomClick = async (room: Room) => {
     if (!user) return
     
@@ -238,8 +212,6 @@ export default function DashboardPage() {
       console.error('Error joining room:', error)
     }
   }
-
-  const currentRoom = rooms.find(room => room.id === selectedRoom?.id)
 
   return (
     <div className="h-[calc(100vh-2rem)] flex gap-4">
@@ -300,53 +272,37 @@ export default function DashboardPage() {
                 handleToggleVideo();
                 setIsVideoEnabled(!isVideoEnabled);
               }}
-              onLeaveRoom={handleLeaveRoom}
+              onLeaveRoom={handleLeaveCall}
             />
           </div>
         )}
       </div>
 
-      {/* Chat Section */}
-      <div className="flex-1 bg-muted/30 rounded-lg flex flex-col">
-        <div className="p-4 border-b">
-          <h2 className="font-semibold flex items-center gap-2">
-            <MessageSquare className="h-4 w-4" />
-            Chat {currentRoom?.name ? `- ${currentRoom.name}` : ''}
-          </h2>
-        </div>
-        
-        {/* Chat Messages Area */}
-        <div className="flex-1 p-4 space-y-4 overflow-auto">
-          {selectedRoom && messages.get(selectedRoom.id)?.map((message, index) => (
-            <div 
-              key={index} 
-              className={`p-3 rounded-lg ${
-                message.userId === currentUser?.id 
-                  ? 'bg-primary text-primary-foreground ml-auto' 
-                  : 'bg-background'
-              } max-w-[80%]`}
-            >
-              <p className="text-sm font-medium">{message.username}</p>
-              <p className="text-sm">{message.text}</p>
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Chat Input */}
-        <form onSubmit={handleSendMessage} className="p-4 border-t">
-          <input
-            type="text"
-            value={messageInput}
-            onChange={(e) => setMessageInput(e.target.value)}
-            placeholder="Type a message..."
-            className="w-full p-2 rounded-md bg-background"
+      {/* Main Content - Voice Room View */}
+      <div className="flex-1 bg-muted/30 rounded-lg">
+        {selectedRoom ? (
+          <VoiceRoomView
+            roomName={selectedRoom.name}
+            users={selectedRoom.users.map(user => ({
+              id: user.user_id,
+              username: user.profile.username,
+              isMuted: user.isMuted,
+              isVideoOn: user.isVideoOn
+            }))}
+            isInCall={isInCall}
+            currentUserId={user?.id || ''}
+            onJoinCall={handleJoinCall}
+            onLeaveCall={handleLeaveCall}
           />
-        </form>
+        ) : (
+          <div className="flex items-center justify-center h-full text-muted-foreground">
+            Select a voice room to join
+          </div>
+        )}
       </div>
 
       {/* Video Section - Only show when enabled */}
-      {isVideoEnabled && selectedRoom && (
+      {isVideoEnabled && isInCall && selectedRoom && (
         <div className="w-96 bg-muted/30 rounded-lg p-4 flex flex-col">
           <h2 className="font-semibold mb-4 flex items-center gap-2">
             <Video className="h-4 w-4" />
@@ -361,7 +317,7 @@ export default function DashboardPage() {
               />
             )}
             {Array.from(peerStreams).map(([peerId, stream]) => {
-              const peerUser = currentRoom?.users.find(u => u.id === peerId)
+              const peerUser = selectedRoom.users.find(u => u.user_id === peerId)
               return stream && (
                 <VideoPlayer
                   key={peerId}
