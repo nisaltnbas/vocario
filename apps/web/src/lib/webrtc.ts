@@ -1,4 +1,5 @@
 import { Socket } from 'socket.io-client';
+import { supabase } from './supabase';
 
 interface PeerConnection {
   userId: string;
@@ -84,12 +85,34 @@ export class WebRTCService {
     }
   }
 
+  private async checkFriendship(otherUserId: string): Promise<boolean> {
+    if (!this.userId) return false;
+
+    const { data: friendships } = await supabase
+      .from('friendships')
+      .select('*')
+      .or(
+        `and(sender_id.eq.${this.userId},receiver_id.eq.${otherUserId}),` +
+        `and(sender_id.eq.${otherUserId},receiver_id.eq.${this.userId})`
+      )
+      .eq('status', 'ACCEPTED')
+      .maybeSingle();
+
+    return !!friendships;
+  }
+
   private setupSocketListeners() {
     if (!this.socket) return;
 
     this.socket.on('user-joined', async ({ userId }: { userId: string }) => {
       console.log('User joined:', userId);
-      await this.createPeerConnection(userId);
+      // Check if users are friends before creating peer connection
+      const areFriends = await this.checkFriendship(userId);
+      if (areFriends) {
+        await this.createPeerConnection(userId);
+      } else {
+        console.log('Skipping peer connection - users are not friends');
+      }
     });
 
     this.socket.on('user-left', ({ userId }: { userId: string }) => {
@@ -99,11 +122,17 @@ export class WebRTCService {
 
     this.socket.on('offer', async ({ from, offer }: { from: string; offer: RTCSessionDescriptionInit }) => {
       console.log('Received offer from:', from);
-      const pc = await this.createPeerConnection(from);
-      await pc.connection.setRemoteDescription(offer);
-      const answer = await pc.connection.createAnswer();
-      await pc.connection.setLocalDescription(answer);
-      this.socket?.emit('answer', { to: from, answer });
+      // Check if users are friends before accepting the offer
+      const areFriends = await this.checkFriendship(from);
+      if (areFriends) {
+        const pc = await this.createPeerConnection(from);
+        await pc.connection.setRemoteDescription(offer);
+        const answer = await pc.connection.createAnswer();
+        await pc.connection.setLocalDescription(answer);
+        this.socket?.emit('answer', { to: from, answer });
+      } else {
+        console.log('Rejecting offer - users are not friends');
+      }
     });
 
     this.socket.on('answer', async ({ from, answer }: { from: string; answer: RTCSessionDescriptionInit }) => {

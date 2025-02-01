@@ -2,8 +2,9 @@
 
 import { redirect } from "next/navigation"
 import { useEffect, useState } from "react"
-import { Home, Settings, LogOut } from "lucide-react"
+import { Home, Settings, LogOut, Users } from "lucide-react"
 import { supabase } from "@/lib/supabase"
+import { FriendsList } from "@/components/friends-list"
 
 export default function DashboardLayout({
   children,
@@ -11,6 +12,7 @@ export default function DashboardLayout({
   children: React.ReactNode
 }) {
   const [isLoading, setIsLoading] = useState(true)
+  const [showFriends, setShowFriends] = useState(false)
 
   useEffect(() => {
     checkUser()
@@ -48,11 +50,17 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen">
-      {/* Sidebar */}
+      {/* Left Sidebar */}
       <aside className="w-20 bg-muted flex flex-col items-center py-4">
         <div className="flex-1 flex flex-col items-center gap-4">
           <button className="p-3 rounded-lg bg-primary text-white">
             <Home className="h-6 w-6" />
+          </button>
+          <button 
+            className={`p-3 rounded-lg ${showFriends ? 'bg-accent' : 'hover:bg-accent'}`}
+            onClick={() => setShowFriends(!showFriends)}
+          >
+            <Users className="h-6 w-6" />
           </button>
           <button className="p-3 rounded-lg hover:bg-accent">
             <Settings className="h-6 w-6" />
@@ -70,6 +78,13 @@ export default function DashboardLayout({
       <main className="flex-1 overflow-auto bg-background p-4">
         {children}
       </main>
+
+      {/* Right Sidebar - Friends */}
+      {showFriends && (
+        <aside className="w-80 bg-muted/30 p-4 overflow-auto">
+          <FriendsList />
+        </aside>
+      )}
     </div>
   )
 } 

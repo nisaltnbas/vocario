@@ -38,6 +38,17 @@ CREATE TABLE IF NOT EXISTS webrtc_signals (
     created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
 );
 
+-- Create friendships table
+CREATE TABLE IF NOT EXISTS friendships (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    sender_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    receiver_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('PENDING', 'ACCEPTED', 'REJECTED')),
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()),
+    updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()),
+    UNIQUE(sender_id, receiver_id)
+);
+
 -- Create some initial rooms
 INSERT INTO rooms (name, type) VALUES
     ('General Chat', 'GENERAL'),
@@ -52,6 +63,7 @@ BEGIN
     ALTER TABLE room_users ENABLE ROW LEVEL SECURITY;
     ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
     ALTER TABLE webrtc_signals ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE friendships ENABLE ROW LEVEL SECURITY;
 EXCEPTION 
     WHEN OTHERS THEN NULL;
 END $$;
@@ -66,6 +78,9 @@ BEGIN
     DROP POLICY IF EXISTS "Users can update own profile" ON profiles;
     DROP POLICY IF EXISTS "Users can insert signals" ON webrtc_signals;
     DROP POLICY IF EXISTS "Users can read signals sent to them" ON webrtc_signals;
+    DROP POLICY IF EXISTS "Users can read their own friendships" ON friendships;
+    DROP POLICY IF EXISTS "Users can send friend requests" ON friendships;
+    DROP POLICY IF EXISTS "Users can update friendship status" ON friendships;
 EXCEPTION 
     WHEN OTHERS THEN NULL;
 END $$;
@@ -112,6 +127,22 @@ CREATE POLICY "Users can read signals sent to them"
     ON webrtc_signals FOR SELECT
     TO authenticated
     USING (auth.uid() = to_user_id);
+
+CREATE POLICY "Users can read their own friendships"
+    ON friendships FOR SELECT
+    TO authenticated
+    USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
+
+CREATE POLICY "Users can send friend requests"
+    ON friendships FOR INSERT
+    TO authenticated
+    WITH CHECK (auth.uid() = sender_id);
+
+CREATE POLICY "Users can update friendship status"
+    ON friendships FOR UPDATE
+    TO authenticated
+    USING (auth.uid() = receiver_id)
+    WITH CHECK (auth.uid() = receiver_id);
 
 -- Create a function to clean up old signals
 CREATE OR REPLACE FUNCTION delete_old_signals() RETURNS void AS $$
