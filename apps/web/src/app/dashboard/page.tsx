@@ -13,12 +13,21 @@ import { VoiceControls } from '@/components/voice-controls'
 import { useVoiceRoom } from '@/hooks/useVoiceRoom'
 import { VoiceRoomView } from '@/components/voice-room-view'
 
+interface Message {
+  id: string
+  userId: string
+  username: string
+  text: string
+  timestamp: Date
+}
+
 export default function DashboardPage() {
   const { user } = useUser()
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null)
   const [socket, setSocket] = useState<any>(null)
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [rooms, setRooms] = useState<Room[]>([])
+  const [messages, setMessages] = useState<Message[]>([])
   const [peerStreams, setPeerStreams] = useState<Map<string, MediaStream | null>>(new Map())
   const [isVideoEnabled, setIsVideoEnabled] = useState(false)
   const [isInCall, setIsInCall] = useState(false)
@@ -70,6 +79,21 @@ export default function DashboardPage() {
     }
   };
 
+  const handleSendMessage = (text: string) => {
+    if (!socket || !selectedRoom || !currentUser) return;
+
+    const message = {
+      id: Date.now().toString(),
+      roomId: selectedRoom.id,
+      userId: currentUser.id,
+      username: currentUser.user_metadata.username,
+      text,
+      timestamp: new Date()
+    };
+
+    socket.emit('chat-message', message);
+  };
+
   // Cleanup function to remove user from all rooms
   const cleanup = async () => {
     if (user) {
@@ -88,6 +112,11 @@ export default function DashboardPage() {
     // Socket.io bağlantısını kur
     const newSocket = io("http://localhost:3001")
     setSocket(newSocket)
+
+    // Chat mesajlarını dinle
+    newSocket.on('chat-message', (message: Message) => {
+      setMessages(prev => [...prev, message])
+    })
 
     // Kullanıcı bilgilerini al
     const getUser = async () => {
@@ -291,8 +320,10 @@ export default function DashboardPage() {
             }))}
             isInCall={isInCall}
             currentUserId={user?.id || ''}
+            messages={messages}
             onJoinCall={handleJoinCall}
             onLeaveCall={handleLeaveCall}
+            onSendMessage={handleSendMessage}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground">
